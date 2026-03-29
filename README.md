@@ -2,6 +2,12 @@
 
 A macOS menu-bar application that converts speech to text in real time using Apple's built-in Speech Recognition framework. Press a hotkey, speak, and the transcribed text is injected directly into the currently focused text field.
 
+
+
+https://github.com/user-attachments/assets/3228f78a-f035-447d-98ef-8826798a122c
+
+
+
 ## Requirements
 
 - macOS 14.0 (Sonoma) or later

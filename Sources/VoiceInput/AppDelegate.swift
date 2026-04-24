@@ -1,7 +1,7 @@
 import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var statusItem: NSStatusItem!
+    private var statusItem: NSStatusItem?
     private let keyMonitor = KeyMonitor()
     private let speechEngine = SpeechEngine()
     private let textInjector = TextInjector()
@@ -12,7 +12,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isTranscribing = false
 
     private var enableMenuItem: NSMenuItem!
-    private var modelStatusItem: NSMenuItem!
     private var languageItems: [NSMenuItem] = []
     private var modelItems: [NSMenuItem] = []
     private var hotkeyItems: [NSMenuItem] = []
@@ -42,7 +41,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         speechEngine.languageCode = selectedLanguage.isEmpty ? nil : selectedLanguage
         keyMonitor.hotkey = selectedHotkey
 
-        setupStatusBar()
         setupSpeechCallbacks()
 
         if !keyMonitor.start() {
@@ -50,23 +48,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         keyMonitor.onHotkeyToggle = { [weak self] in self?.hotkeyToggle() }
+
+        // Show a "Loading…" bubble immediately so the user knows the app is
+        // starting up. The menu-bar icon only appears once the model is
+        // warmed up — icon visible ⇔ ready to press.
+        overlayPanel.show(text: "Loading Whisper model…")
     }
 
     // MARK: - Key events
 
     private func hotkeyToggle() {
-        guard isEnabled else { return }
+        guard isEnabled, isModelReady else { return }
         if isRecording {
             stopAndTranscribe()
         } else if !isTranscribing {
-            guard isModelReady else {
-                overlayPanel.show(text: modelStatusItem?.title ?? "Model not ready")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in
-                    self?.overlayPanel.dismiss()
-                }
-                NSSound(named: .init("Funk"))?.play()
-                return
-            }
             startListening()
         }
     }
@@ -112,15 +107,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         speechEngine.onModelLoading = { [weak self] msg in
             guard let self else { return }
             self.isModelReady = false
-            self.statusItem.button?.toolTip = msg
-            self.modelStatusItem?.title = msg
+            self.overlayPanel.updateText(msg)
         }
 
         speechEngine.onModelReady = { [weak self] in
             guard let self else { return }
             self.isModelReady = true
-            self.statusItem.button?.toolTip = "VoiceInput (ready)"
-            self.modelStatusItem?.title = "Model: ready"
+            if self.statusItem == nil {
+                self.setupStatusBar()
+            }
+            self.statusItem?.button?.toolTip = "VoiceInput (ready)"
+            self.overlayPanel.dismiss()
         }
     }
 
@@ -146,12 +143,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateStatusIcon(recording: false)
 
         let menu = NSMenu()
-
-        modelStatusItem = NSMenuItem(title: "Model: initializing...", action: nil, keyEquivalent: "")
-        modelStatusItem.isEnabled = false
-        menu.addItem(modelStatusItem)
-
-        menu.addItem(.separator())
 
         enableMenuItem = NSMenuItem(title: "Enabled", action: #selector(toggleEnabled), keyEquivalent: "")
         enableMenuItem.target = self
@@ -223,11 +214,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
 
-        statusItem.menu = menu
+        statusItem?.menu = menu
     }
 
     private func updateStatusIcon(recording: Bool) {
-        guard let button = statusItem.button else { return }
+        guard let button = statusItem?.button else { return }
         let name = recording ? "mic.fill" : "mic"
         button.image = NSImage(systemSymbolName: name, accessibilityDescription: "Voice Input")
         button.contentTintColor = recording ? .systemRed : nil

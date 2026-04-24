@@ -96,6 +96,28 @@ final class SpeechEngine {
                 )
                 let kit = try await WhisperKit(config)
 
+                // Warmup: run one full transcription through the pipeline with
+                // silent audio. This forces Core ML lazy init, tokenizer load,
+                // and first-run kernel compilation — without it the user's
+                // first real recording takes 2-5s extra.
+                await MainActor.run {
+                    self.onModelLoading?("Warming up \(name)...")
+                }
+                let silence = [Float](repeating: 0, count: 16_000)   // 1 second @ 16kHz
+                let warmupOpts = DecodingOptions(
+                    verbose: false,
+                    task: .transcribe,
+                    language: "en",
+                    temperature: 0.0,
+                    temperatureFallbackCount: 0,
+                    usePrefillPrompt: true,
+                    detectLanguage: false,
+                    skipSpecialTokens: true,
+                    withoutTimestamps: true,
+                    noSpeechThreshold: 0.6
+                )
+                _ = try? await kit.transcribe(audioArray: silence, decodeOptions: warmupOpts)
+
                 await MainActor.run {
                     self.whisperKit = kit
                     self.isLoadingModel = false

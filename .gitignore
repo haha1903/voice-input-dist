@@ -1,3 +1,14 @@
 .build/
 .DS_Store
 logs/
+
+# Build artifacts — built locally via `make build`
+VoiceInput.app/
+AppIcon.icns
+AppIcon.iconset/
+
+# Generated icon PNG (kept out so the icon generator is the source of truth)
+icon_1024.png
+
+# Local-only signing identity (see Makefile for the format)
+Makefile.local

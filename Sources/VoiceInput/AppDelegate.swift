@@ -1,5 +1,4 @@
 import AppKit
-import Speech
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
@@ -10,91 +9,98 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var isEnabled = true
     private var isRecording = false
-    private var lastPartialResult = ""
-    private var finalResultTimer: Timer?
+    private var isTranscribing = false
 
     private var enableMenuItem: NSMenuItem!
-    private var llmMenuItem: NSMenuItem!
-    private lazy var settingsWindow = SettingsWindow()
+    private var modelStatusItem: NSMenuItem!
     private var languageItems: [NSMenuItem] = []
-    private var selectedLocaleCode: String {
-        get { UserDefaults.standard.string(forKey: "selectedLocaleCode") ?? "zh-CN" }
-        set { UserDefaults.standard.set(newValue, forKey: "selectedLocaleCode") }
+    private var modelItems: [NSMenuItem] = []
+    private var hotkeyItems: [NSMenuItem] = []
+    private var isModelReady = false
+
+    private var selectedLanguage: String {
+        get { UserDefaults.standard.string(forKey: "whisperLanguage") ?? "zh" }
+        set { UserDefaults.standard.set(newValue.isEmpty ? nil : newValue, forKey: "whisperLanguage") }
+    }
+
+    private var selectedModel: String {
+        get { UserDefaults.standard.string(forKey: "whisperModel") ?? "large-v3_turbo" }
+        set { UserDefaults.standard.set(newValue, forKey: "whisperModel") }
+    }
+
+    private var selectedHotkey: HotkeyType {
+        get {
+            let raw = UserDefaults.standard.string(forKey: "hotkey") ?? HotkeyType.rightCommand.rawValue
+            return HotkeyType(rawValue: raw) ?? .rightCommand
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "hotkey") }
     }
 
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let savedCode = selectedLocaleCode
-        if !savedCode.isEmpty {
-            speechEngine.locale = Locale(identifier: savedCode)
-        }
+        speechEngine.languageCode = selectedLanguage.isEmpty ? nil : selectedLanguage
+        keyMonitor.hotkey = selectedHotkey
 
         setupStatusBar()
         setupSpeechCallbacks()
-
-        SpeechEngine.requestPermissions { [weak self] granted, errorMsg in
-            if !granted, let msg = errorMsg {
-                self?.showAlert(title: "Permission Required", message: msg)
-            }
-        }
 
         if !keyMonitor.start() {
             showAccessibilityAlert()
         }
 
-        keyMonitor.onFnDown = { [weak self] in self?.fnDown() }
-        keyMonitor.onFnUp = { [weak self] in self?.fnUp() }
+        keyMonitor.onHotkeyToggle = { [weak self] in self?.hotkeyToggle() }
     }
 
     // MARK: - Key events
 
-    private func fnDown() {
-        guard isEnabled, !isRecording else { return }
-        LLMRefiner.shared.cancel()
-        isRecording = true
-        lastPartialResult = ""
+    private func hotkeyToggle() {
+        guard isEnabled else { return }
+        if isRecording {
+            stopAndTranscribe()
+        } else if !isTranscribing {
+            guard isModelReady else {
+                overlayPanel.show(text: modelStatusItem?.title ?? "Model not ready")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in
+                    self?.overlayPanel.dismiss()
+                }
+                NSSound(named: .init("Funk"))?.play()
+                return
+            }
+            startListening()
+        }
+    }
 
+    private func startListening() {
+        isRecording = true
         updateStatusIcon(recording: true)
         overlayPanel.show(text: "Listening...")
         NSSound(named: .init("Tink"))?.play()
-
         speechEngine.startRecording()
     }
 
-    private func fnUp() {
-        guard isRecording else { return }
+    private func stopAndTranscribe() {
         isRecording = false
-
+        isTranscribing = true
         updateStatusIcon(recording: false)
+        overlayPanel.updateText("Transcribing...")
         speechEngine.stopRecording()
-
-        finalResultTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
-            self?.finishTranscription()
-        }
     }
 
     // MARK: - Speech callbacks
 
     private func setupSpeechCallbacks() {
-        speechEngine.onPartialResult = { [weak self] text in
-            guard let self else { return }
-            self.lastPartialResult = text
-            self.overlayPanel.updateText(text)
-        }
-
         speechEngine.onFinalResult = { [weak self] text in
             guard let self else { return }
-            self.lastPartialResult = text
-            self.finalResultTimer?.invalidate()
-            self.finalResultTimer = nil
-            self.finishTranscription()
+            self.isTranscribing = false
+            self.finishTranscription(text: text)
         }
 
         speechEngine.onError = { [weak self] msg in
             guard let self else { return }
+            self.isTranscribing = false
             self.overlayPanel.updateText("Error: \(msg)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
                 self.overlayPanel.dismiss()
             }
         }
@@ -103,70 +109,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.overlayPanel.updateAudioLevel(level)
         }
 
-        speechEngine.onLocaleUnavailable = { [weak self] msg in
-            self?.showAlert(title: "Language Unavailable", message: msg)
+        speechEngine.onModelLoading = { [weak self] msg in
+            guard let self else { return }
+            self.isModelReady = false
+            self.statusItem.button?.toolTip = msg
+            self.modelStatusItem?.title = msg
+        }
+
+        speechEngine.onModelReady = { [weak self] in
+            guard let self else { return }
+            self.isModelReady = true
+            self.statusItem.button?.toolTip = "VoiceInput (ready)"
+            self.modelStatusItem?.title = "Model: ready"
         }
     }
 
-    private func finishTranscription() {
-        finalResultTimer?.invalidate()
-        finalResultTimer = nil
-
-        let text = lastPartialResult.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func finishTranscription(text rawText: String) {
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !text.isEmpty else {
             overlayPanel.dismiss()
-            lastPartialResult = ""
             return
         }
 
-        let refiner = LLMRefiner.shared
-        if refiner.isEnabled && refiner.isConfigured {
-            overlayPanel.showRefining()
-            refiner.refine(text) { [weak self] result in
-                guard let self else { return }
-                let finalText: String
-                switch result {
-                case .success(let refined):
-                    finalText = refined.isEmpty ? text : refined
-                    let wasRefined = finalText != text
-                    if wasRefined {
-                        self.overlayPanel.updateText("✨ \(finalText)")
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                            self.overlayPanel.dismiss()
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                self.textInjector.inject(finalText)
-                                NSSound(named: .init("Pop"))?.play()
-                            }
-                        }
-                    } else {
-                        self.overlayPanel.dismiss()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            self.textInjector.inject(finalText)
-                            NSSound(named: .init("Pop"))?.play()
-                        }
-                    }
-                case .failure(let error):
-                    NSLog("[LLMRefiner] Refine failed: %@", error.localizedDescription)
-                    finalText = text
-                    self.overlayPanel.updateText("Refine failed: \(error.localizedDescription)")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        self.overlayPanel.dismiss()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            self.textInjector.inject(finalText)
-                            NSSound(named: .init("Pop"))?.play()
-                        }
-                    }
-                }
-                self.lastPartialResult = ""
-            }
-        } else {
-            overlayPanel.dismiss()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.textInjector.inject(text)
-                NSSound(named: .init("Pop"))?.play()
-            }
-            lastPartialResult = ""
+        overlayPanel.dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.textInjector.inject(text)
+            NSSound(named: .init("Pop"))?.play()
         }
     }
 
@@ -178,6 +147,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
 
+        modelStatusItem = NSMenuItem(title: "Model: initializing...", action: nil, keyEquivalent: "")
+        modelStatusItem.isEnabled = false
+        menu.addItem(modelStatusItem)
+
+        menu.addItem(.separator())
+
         enableMenuItem = NSMenuItem(title: "Enabled", action: #selector(toggleEnabled), keyEquivalent: "")
         enableMenuItem.target = self
         enableMenuItem.state = .on
@@ -185,44 +160,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
+        // Hotkey submenu
+        let hotkeyItem = NSMenuItem(title: "Hotkey", action: nil, keyEquivalent: "")
+        let hotkeyMenu = NSMenu()
+        for type in HotkeyType.allCases {
+            let item = NSMenuItem(title: type.displayName, action: #selector(changeHotkey(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = type.rawValue
+            item.state = type == selectedHotkey ? .on : .off
+            hotkeyItems.append(item)
+            hotkeyMenu.addItem(item)
+        }
+        hotkeyItem.submenu = hotkeyMenu
+        menu.addItem(hotkeyItem)
+
+        // Language submenu
         let langItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
         let langMenu = NSMenu()
         let languages: [(String, String)] = [
-            ("System Default", ""),
-            ("English (US)", "en-US"),
-            ("中文 (简体)", "zh-CN"),
-            ("中文 (繁體)", "zh-TW"),
-            ("日本語", "ja-JP"),
-            ("한국어", "ko-KR"),
+            ("Auto Detect (mixed)", ""),
+            ("English", "en"),
+            ("中文", "zh"),
+            ("日本語", "ja"),
+            ("한국어", "ko"),
         ]
         for (name, code) in languages {
             let item = NSMenuItem(title: name, action: #selector(changeLanguage(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = code
-            item.state = code == selectedLocaleCode ? .on : .off
+            item.state = code == selectedLanguage ? .on : .off
             languageItems.append(item)
             langMenu.addItem(item)
         }
         langItem.submenu = langMenu
         menu.addItem(langItem)
 
-        // LLM Refinement submenu
-        let llmItem = NSMenuItem(title: "LLM Refinement", action: nil, keyEquivalent: "")
-        let llmMenu = NSMenu()
-
-        llmMenuItem = NSMenuItem(title: "Enabled", action: #selector(toggleLLM), keyEquivalent: "")
-        llmMenuItem.target = self
-        llmMenuItem.state = LLMRefiner.shared.isEnabled ? .on : .off
-        llmMenu.addItem(llmMenuItem)
-
-        llmMenu.addItem(.separator())
-
-        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openLLMSettings), keyEquivalent: "")
-        settingsItem.target = self
-        llmMenu.addItem(settingsItem)
-
-        llmItem.submenu = llmMenu
-        menu.addItem(llmItem)
+        // Model submenu
+        let modelItem = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
+        let modelMenu = NSMenu()
+        let models = [
+            "tiny",
+            "base",
+            "small",
+            "medium",
+            "large-v3",
+            "large-v3_turbo",
+        ]
+        for name in models {
+            let item = NSMenuItem(title: name, action: #selector(changeModel(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = name
+            item.state = name == selectedModel ? .on : .off
+            modelItems.append(item)
+            modelMenu.addItem(item)
+        }
+        modelItem.submenu = modelMenu
+        menu.addItem(modelItem)
 
         menu.addItem(.separator())
 
@@ -261,25 +254,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func changeHotkey(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let type = HotkeyType(rawValue: raw) else { return }
+        selectedHotkey = type
+        keyMonitor.hotkey = type
+
+        for item in hotkeyItems {
+            item.state = (item.representedObject as? String) == raw ? .on : .off
+        }
+    }
+
     @objc private func changeLanguage(_ sender: NSMenuItem) {
         guard let code = sender.representedObject as? String else { return }
-        selectedLocaleCode = code
-        speechEngine.locale = code.isEmpty ? .current : Locale(identifier: code)
+        selectedLanguage = code
+        speechEngine.languageCode = code.isEmpty ? nil : code
 
         for item in languageItems {
             item.state = (item.representedObject as? String) == code ? .on : .off
         }
     }
 
-    @objc private func toggleLLM() {
-        let refiner = LLMRefiner.shared
-        refiner.isEnabled.toggle()
-        llmMenuItem.state = refiner.isEnabled ? .on : .off
-    }
+    @objc private func changeModel(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        selectedModel = name
+        speechEngine.changeModel(name)
 
-    @objc private func openLLMSettings() {
-        settingsWindow.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        for item in modelItems {
+            item.state = (item.representedObject as? String) == name ? .on : .off
+        }
     }
 
     @objc private func quit() {
@@ -293,7 +296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "Accessibility Permission Required"
         alert.informativeText = """
-            VoiceInput needs Accessibility permission to monitor the Fn key.
+            VoiceInput needs Accessibility permission to monitor the hotkey.
 
             1. Open System Settings → Privacy & Security → Accessibility
             2. Add and enable VoiceInput

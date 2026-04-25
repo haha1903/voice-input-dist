@@ -3,7 +3,7 @@ APP_BUNDLE := $(APP_NAME).app
 BUILD_DIR := $(shell swift build -c release --show-bin-path 2>/dev/null || echo .build/release)
 
 # Version (single source of truth — bumped on release)
-VERSION := 0.1.2
+VERSION := 0.1.3
 
 # Default: ad-hoc signing (works for local use; TCC re-prompts on each rebuild).
 # To sign with your Apple Development identity without committing it to git,

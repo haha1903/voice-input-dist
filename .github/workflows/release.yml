@@ -36,7 +36,16 @@ jobs:
           echo "Resolved version: $VERSION"
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+        run: |
+          # Pick the latest installed Xcode (need Swift 6.0+ for swift-jinja 2.x)
+          LATEST_XCODE=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$LATEST_XCODE" ]; then
+            LATEST_XCODE=/Applications/Xcode.app
+          fi
+          echo "Using $LATEST_XCODE"
+          sudo xcode-select -s "$LATEST_XCODE"
+          xcodebuild -version
+          swift --version
 
       - name: Import Developer ID certificate
         env:

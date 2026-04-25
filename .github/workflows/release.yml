@@ -149,16 +149,13 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           ZIP="dist/VoiceInput-${VERSION}.zip"
           SHA256="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
-          BRANCH="bump-voice-input-${VERSION}"
           TAP_DIR="$RUNNER_TEMP/homebrew-voiceinput"
 
           git clone "https://x-access-token:${TAP_PAT}@github.com/haha1903/homebrew-voiceinput.git" "$TAP_DIR"
           cd "$TAP_DIR"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
 
-          # Update version + sha256 in the cask file
           /usr/bin/sed -i '' -E "s/^( *version )\".*\"/\\1\"${VERSION}\"/" Casks/voice-input.rb
           /usr/bin/sed -i '' -E "s/^( *sha256 )\".*\"/\\1\"${SHA256}\"/" Casks/voice-input.rb
 
@@ -169,19 +166,7 @@ jobs:
 
           git add Casks/voice-input.rb
           git commit -m "Bump voice-input to ${VERSION}"
-          git push -u origin "$BRANCH"
-
-          GH_TOKEN="$TAP_PAT" gh pr create \
-            --repo haha1903/homebrew-voiceinput \
-            --base main \
-            --head "$BRANCH" \
-            --title "Bump voice-input to ${VERSION}" \
-            --body "Auto-bump from [voice-input-dist v${VERSION}](https://github.com/haha1903/voice-input-dist/releases/tag/v${VERSION}).
-
-          - **Version:** \`${VERSION}\`
-          - **SHA256:** \`${SHA256}\`
-
-          This PR was generated automatically by the release workflow."
+          git push origin main
 
       - name: Cleanup keychain
         if: always()

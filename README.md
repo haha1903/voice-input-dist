@@ -134,4 +134,5 @@ All credit for the original AVAudioEngine + CGEvent plumbing, overlay panel, and
 
 ## License
 
-See the upstream repository for license details.
+[MIT License](LICENSE) — Copyright (c) 2025 yetone (original `voice-input-src`),
+Copyright (c) 2026 Hai Chang (this fork's modifications).

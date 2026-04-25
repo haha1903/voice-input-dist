@@ -7,8 +7,8 @@ VoiceInput.app/
 AppIcon.icns
 AppIcon.iconset/
 
-# Generated icon PNG (kept out so the icon generator is the source of truth)
-icon_1024.png
+# icon_1024.png is committed so CI doesn't need Pillow installed.
+# Regenerate locally with `python3 make-icon.py` if you change the design.
 
 # Local-only signing identity (see Makefile for the format)
 Makefile.local

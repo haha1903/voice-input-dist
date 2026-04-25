@@ -22,7 +22,27 @@ No subscriptions. No cloud. No account. Just a microphone icon in your menu bar.
 
 ## Install
 
-### Option A — build from source (recommended)
+### Option A — Homebrew Cask (recommended)
+
+```bash
+brew install --cask haha1903/voiceinput/voice-input
+```
+
+This installs a notarized, signed `.app` from the [GitHub Releases](https://github.com/haha1903/voice-input-dist/releases). Updates ship via `brew upgrade --cask voice-input`.
+
+To uninstall (keep user data):
+
+```bash
+brew uninstall --cask voice-input
+```
+
+To uninstall and wipe the downloaded Whisper model + preferences:
+
+```bash
+brew uninstall --cask --zap voice-input
+```
+
+### Option B — build from source
 
 ```bash
 git clone https://github.com/haha1903/voice-input-dist.git
@@ -34,7 +54,7 @@ The first launch downloads the Whisper model (~3 GB, Core ML FP16) into
 `~/Library/Application Support/VoiceInput/`. Subsequent launches are fully
 offline. Hover the menu-bar mic icon to see load progress.
 
-### Option B — use a stable signing identity (optional)
+### Option C — use a stable signing identity (optional, source builds only)
 
 By default `make build` uses ad-hoc signing. macOS TCC (Accessibility,
 Microphone) treats every rebuild as a new app, so you'll have to re-grant

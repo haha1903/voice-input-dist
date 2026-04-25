@@ -18,3 +18,4 @@ Makefile.local
 *.p12
 *.key
 dist/
+RELEASE_TODO.md

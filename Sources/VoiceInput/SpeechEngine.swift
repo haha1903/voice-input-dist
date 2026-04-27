@@ -130,7 +130,7 @@ final class SpeechEngine {
                     self.onModelReady?()
                 }
             } catch {
-                NSLog("[VoiceInput] Model load failed: %@", error.localizedDescription)
+                Logger.log("Model load failed: \(error.localizedDescription)")
                 await MainActor.run {
                     self.isLoadingModel = false
                     self.onError?("Model load failed: \(error.localizedDescription)")
@@ -307,7 +307,7 @@ final class SpeechEngine {
         bufferLock.unlock()
 
         let durationSec = Double(samples.count) / sampleRate
-        print("[VoiceInput] stopRecording: \(samples.count) samples (\(String(format: "%.2f", durationSec))s)")
+        Logger.log("stopRecording: \(samples.count) samples (\(String(format: "%.2f", durationSec))s)")
 
         guard !samples.isEmpty else {
             onFinalResult?("")
@@ -339,22 +339,65 @@ final class SpeechEngine {
                     noSpeechThreshold: 0.6,                 // silence gate — returns empty on silent input
                     chunkingStrategy: .none
                 )
-                print("[VoiceInput] Starting transcription (lang=\(lang ?? "auto"))")
+                Logger.log("Starting transcription (lang=\(lang ?? "auto"))")
                 let t0 = CACurrentMediaTime()
                 let results = try await kit.transcribe(audioArray: samples, decodeOptions: options)
                 let dt = CACurrentMediaTime() - t0
                 let text = results.map { $0.text }.joined(separator: " ")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                print("[VoiceInput] Transcribed in \(String(format: "%.2fs", dt)): '\(text)'")
+                Logger.log("Transcribed in \(String(format: "%.2fs", dt)): '\(text)'")
+
+                // Empty result = Whisper decided this was silence or
+                // couldn't produce tokens. Save the audio for offline
+                // inspection — you (or future-you) can `afplay` it
+                // and judge whether it was really silence, whether
+                // the start/end got clipped, or whether AGC killed
+                // it. Files live in ~/Library/Logs/VoiceInput/ and
+                // are pruned with the 7-day log retention.
+                if text.isEmpty {
+                    SpeechEngine.saveFailureWav(samples: samples, sampleRate: sampleRate)
+                }
+
                 await MainActor.run {
                     self.onFinalResult?(text)
                 }
             } catch {
-                NSLog("[VoiceInput] Transcribe failed: %@", error.localizedDescription)
+                Logger.log("Transcribe failed: \(error.localizedDescription)")
                 await MainActor.run {
                     self.onError?("Transcribe failed: \(error.localizedDescription)")
                 }
             }
+        }
+    }
+
+    /// Write the raw 16 kHz mono Float32 PCM buffer to a WAV file in
+    /// the log directory, named `fail-<timestamp>.wav`. Called only
+    /// when transcription returns an empty string.
+    private static func saveFailureWav(samples: [Float], sampleRate: Double) {
+        let name = "fail-\(Logger.filenameTimestamp()).wav"
+        let url = Logger.directory.appendingPathComponent(name)
+        do {
+            guard let format = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: sampleRate,
+                channels: 1,
+                interleaved: false
+            ) else { return }
+
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            let frameCount = AVAudioFrameCount(samples.count)
+            guard frameCount > 0,
+                  let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount),
+                  let channel = buffer.floatChannelData?[0]
+            else { return }
+            buffer.frameLength = frameCount
+            samples.withUnsafeBufferPointer { src in
+                channel.update(from: src.baseAddress!, count: samples.count)
+            }
+            try file.write(from: buffer)
+            Logger.log("Saved failing audio for inspection: \(url.path)")
+        } catch {
+            Logger.log("Could not save failing audio: \(error.localizedDescription)")
         }
     }
 

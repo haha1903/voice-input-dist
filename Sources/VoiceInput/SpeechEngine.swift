@@ -16,6 +16,12 @@ final class SpeechEngine {
     private let bufferLock = NSLock()
     private let sampleRate: Double = 16_000
 
+    // Serial queue for tap-callback work. By funnelling every callback
+    // through this queue, stopRecording() can use a sync barrier to
+    // guarantee all in-flight resample/append work has completed before
+    // it snapshots pcmBuffer — no more dropped trailing samples.
+    private let captureQueue = DispatchQueue(label: "me.changhai.VoiceInput.capture")
+
     private var whisperKit: WhisperKit?
     private var isLoadingModel = false
     private var modelName: String
@@ -199,7 +205,8 @@ final class SpeechEngine {
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             guard let self else { return }
 
-            // Audio level from source buffer
+            // Audio level can stay on the audio thread (cheap, no
+            // shared state) and is published to main for UI use.
             if let channelData = buffer.floatChannelData?[0] {
                 let frameLength = Int(buffer.frameLength)
                 var sum: Float = 0
@@ -214,36 +221,63 @@ final class SpeechEngine {
                 }
             }
 
-            // Resample to 16kHz mono for Whisper — fresh converter per callback
-            // to avoid any lingering converter state between bursts.
-            guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else { return }
-
-            let ratio = targetFormat.sampleRate / inputFormat.sampleRate
-            let outCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 16)
-            guard let outBuf = AVAudioPCMBuffer(
-                pcmFormat: targetFormat,
-                frameCapacity: outCapacity
-            ) else { return }
-
-            var consumed = false
-            var err: NSError?
-            _ = converter.convert(to: outBuf, error: &err) { _, status in
-                if consumed {
-                    status.pointee = .endOfStream
-                    return nil
-                }
-                consumed = true
-                status.pointee = .haveData
-                return buffer
+            // Copy the audio frames out of the AVAudioPCMBuffer before
+            // dispatching — the buffer object is reused by CoreAudio and
+            // its data is no longer valid once this callback returns.
+            let frameCount = Int(buffer.frameLength)
+            guard frameCount > 0,
+                  let src = buffer.floatChannelData?[0]
+            else { return }
+            var sourceCopy = [Float](repeating: 0, count: frameCount)
+            sourceCopy.withUnsafeMutableBufferPointer { dst in
+                dst.baseAddress!.update(from: src, count: frameCount)
             }
-            if err != nil { return }
+            let copiedFormat = inputFormat
 
-            guard let outChannel = outBuf.floatChannelData?[0] else { return }
-            let outLen = Int(outBuf.frameLength)
-            let samples = Array(UnsafeBufferPointer(start: outChannel, count: outLen))
-            self.bufferLock.lock()
-            self.pcmBuffer.append(contentsOf: samples)
-            self.bufferLock.unlock()
+            // Resample + append on the serial captureQueue so that
+            // stopRecording() can sync-barrier on it.
+            self.captureQueue.async {
+                guard let copiedBuffer = AVAudioPCMBuffer(
+                    pcmFormat: copiedFormat,
+                    frameCapacity: AVAudioFrameCount(frameCount)
+                ) else { return }
+                copiedBuffer.frameLength = AVAudioFrameCount(frameCount)
+                if let dst = copiedBuffer.floatChannelData?[0] {
+                    sourceCopy.withUnsafeBufferPointer { srcPtr in
+                        dst.update(from: srcPtr.baseAddress!, count: frameCount)
+                    }
+                }
+
+                // Fresh converter per buffer to avoid lingering state.
+                guard let converter = AVAudioConverter(from: copiedFormat, to: targetFormat) else { return }
+
+                let ratio = targetFormat.sampleRate / copiedFormat.sampleRate
+                let outCapacity = AVAudioFrameCount(Double(copiedBuffer.frameLength) * ratio + 16)
+                guard let outBuf = AVAudioPCMBuffer(
+                    pcmFormat: targetFormat,
+                    frameCapacity: outCapacity
+                ) else { return }
+
+                var consumed = false
+                var err: NSError?
+                _ = converter.convert(to: outBuf, error: &err) { _, status in
+                    if consumed {
+                        status.pointee = .endOfStream
+                        return nil
+                    }
+                    consumed = true
+                    status.pointee = .haveData
+                    return copiedBuffer
+                }
+                if err != nil { return }
+
+                guard let outChannel = outBuf.floatChannelData?[0] else { return }
+                let outLen = Int(outBuf.frameLength)
+                let resampled = Array(UnsafeBufferPointer(start: outChannel, count: outLen))
+                self.bufferLock.lock()
+                self.pcmBuffer.append(contentsOf: resampled)
+                self.bufferLock.unlock()
+            }
         }
 
         audioEngine.prepare()
@@ -261,10 +295,19 @@ final class SpeechEngine {
             audioEngine.inputNode.removeTap(onBus: 0)
         }
 
+        // Drain captureQueue: tap callbacks already enqueued before
+        // stop()+removeTap() will finish their resample+append work
+        // before this sync returns. Guarantees we see all in-flight
+        // samples — no time-based guess required.
+        captureQueue.sync { }
+
         bufferLock.lock()
         let samples = pcmBuffer
         pcmBuffer.removeAll(keepingCapacity: false)
         bufferLock.unlock()
+
+        let durationSec = Double(samples.count) / sampleRate
+        print("[VoiceInput] stopRecording: \(samples.count) samples (\(String(format: "%.2f", durationSec))s)")
 
         guard !samples.isEmpty else {
             onFinalResult?("")

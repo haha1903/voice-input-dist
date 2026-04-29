@@ -340,6 +340,14 @@ final class SpeechEngine {
                     chunkingStrategy: .none
                 )
                 Logger.log("Starting transcription (lang=\(lang ?? "auto"))")
+                // WhisperKit keeps per-instance state (timings, the
+                // internal audioProcessor, etc.) between transcribe
+                // calls. If a prior call hit the noSpeech path (e.g.
+                // the silent warmup, or a previous silent clip), that
+                // state can bias the next call into also returning
+                // empty — even for perfectly clean speech. Reset
+                // before every run.
+                kit.clearState()
                 let t0 = CACurrentMediaTime()
                 let results = try await kit.transcribe(audioArray: samples, decodeOptions: options)
                 let dt = CACurrentMediaTime() - t0

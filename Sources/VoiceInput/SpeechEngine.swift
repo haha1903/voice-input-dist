@@ -116,7 +116,7 @@ final class SpeechEngine {
                     language: "en",
                     temperature: 0.0,
                     temperatureFallbackCount: 0,
-                    usePrefillPrompt: true,
+                    usePrefillPrompt: false,   // see note in stopRecording()
                     detectLanguage: false,
                     skipSpecialTokens: true,
                     withoutTimestamps: true,
@@ -323,21 +323,34 @@ final class SpeechEngine {
         Task { [weak self] in
             guard let self else { return }
             do {
+                // NOTE on usePrefillPrompt + chunkingStrategy:
+                // Via an offline diagnostic tool running the exact same
+                // model + inputs, we found two orthogonal bugs in
+                // WhisperKit 0.15 + large-v3-turbo that return an empty
+                // transcript for otherwise-clean speech:
+                //   * prefill=true sometimes makes the decoder emit EOT
+                //     immediately on short-to-medium clips (~0.4s empty).
+                //   * chunking=none fails on clips approaching or past
+                //     Whisper's 30s context window, also returning empty.
+                // The only combination that works on both short AND long
+                // audio is prefill=false + chunking=vad. VAD chunking
+                // splits at voice-activity breaks so each segment stays
+                // within the decoder's stable range.
                 let options = DecodingOptions(
                     verbose: false,
                     task: .transcribe,                      // never translate
                     language: lang,                         // nil = auto-detect
                     temperature: 0.0,
-                    temperatureFallbackCount: 0,            // accept first result, no fallback loops (big speedup)
-                    usePrefillPrompt: true,
-                    detectLanguage: lang == nil,            // auto-detect only when no language pinned
+                    temperatureFallbackCount: 0,
+                    usePrefillPrompt: false,
+                    detectLanguage: lang == nil,
                     skipSpecialTokens: true,
                     withoutTimestamps: true,
                     suppressBlank: true,
                     compressionRatioThreshold: 2.4,
                     logProbThreshold: -1.0,
-                    noSpeechThreshold: 0.6,                 // silence gate — returns empty on silent input
-                    chunkingStrategy: .none
+                    noSpeechThreshold: 0.6,
+                    chunkingStrategy: .vad
                 )
                 Logger.log("Starting transcription (lang=\(lang ?? "auto"))")
                 // WhisperKit keeps per-instance state (timings, the

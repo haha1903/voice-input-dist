@@ -28,7 +28,7 @@ No subscriptions. No cloud. No account. Just a microphone icon in your menu bar.
 brew install --cask haha1903/tap/voice-input
 ```
 
-This installs a notarized, signed `.app` from the [GitHub Releases](https://github.com/haha1903/voice-input-dist/releases). Updates ship via `brew upgrade --cask voice-input`.
+This installs a notarized, signed `.app` from the [GitHub Releases](https://github.com/haha1903/voice-input/releases). Updates ship via `brew upgrade --cask voice-input`.
 
 To uninstall (keep user data):
 
@@ -45,8 +45,8 @@ brew uninstall --cask --zap voice-input
 ### Option B — build from source
 
 ```bash
-git clone https://github.com/haha1903/voice-input-dist.git
-cd voice-input-dist
+git clone https://github.com/haha1903/voice-input.git
+cd voice-input
 make install     # builds VoiceInput.app and copies it to /Applications
 ```
 

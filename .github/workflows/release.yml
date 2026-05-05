@@ -140,7 +140,7 @@ jobs:
             --title "VoiceInput v${VERSION}" \
             --notes-file "$NOTES_FILE"
 
-      - name: Bump cask in homebrew-voiceinput tap
+      - name: Bump cask in homebrew-tap tap
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           TAP_PAT: ${{ secrets.TAP_PAT }}
@@ -149,9 +149,9 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           ZIP="dist/VoiceInput-${VERSION}.zip"
           SHA256="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
-          TAP_DIR="$RUNNER_TEMP/homebrew-voiceinput"
+          TAP_DIR="$RUNNER_TEMP/homebrew-tap"
 
-          git clone "https://x-access-token:${TAP_PAT}@github.com/haha1903/homebrew-voiceinput.git" "$TAP_DIR"
+          git clone "https://x-access-token:${TAP_PAT}@github.com/haha1903/homebrew-tap.git" "$TAP_DIR"
           cd "$TAP_DIR"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

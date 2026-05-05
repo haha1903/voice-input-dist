@@ -25,7 +25,7 @@ No subscriptions. No cloud. No account. Just a microphone icon in your menu bar.
 ### Option A — Homebrew Cask (recommended)
 
 ```bash
-brew install --cask haha1903/voiceinput/voice-input
+brew install --cask haha1903/tap/voice-input
 ```
 
 This installs a notarized, signed `.app` from the [GitHub Releases](https://github.com/haha1903/voice-input-dist/releases). Updates ship via `brew upgrade --cask voice-input`.
